@@ -1,0 +1,798 @@
+---
+title: "Predicting Voters' Behavior in US Presidential Elections"
+author: "Chidi Agbaeruneke, Badr Albrikan, Martin Ferreiro, Zachary Lessner"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 4
+    number_sections: true
+fontsize: 12pt
+geometry: margin=1in
+bibliography: references.bib
+nocite: |
+  @*
+urlcolor: "blue"
+---
+
+
+```{r load-packages, include=FALSE}
+library(rmarkdown)
+suppressMessages(library(tidyverse))
+library(knitr)
+library(lubridate)
+library(tinytex)
+library(usmap)
+library(gridExtra)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      fig.align  = "center")
+```
+
+\newpage
+
+# Executive summary
+
+Political analysts tend to agree that recent changes in the demographic composition of the US have reshaped the electorate and that this has had an impact in voting patterns. This hypothesis implies that  economic and demographic characteristics are important determinants of  voting behavior. If this is true, then we should be able to predict election results by analyzing variables such as voters' age, ethnicity, level of education, or income.\
+
+Based on this assumption, we attempt to build a powerful model to anticipate presidential elections outcome in the US. In order to achieve this, we conduct a regression analysis using an MIT database which contains demographic and past election data at the county level. By selecting different combinations of potential explanatory variables we fit different models, and then select among them based on their predicting power and simplicity.\
+
+In the second part of this project, we use our model to compare between different explanatory variables to identify which has the greatest impact on voting behavior. Contrary to what we expected based on our literature review, we find that that the percentage of college educated voters in a county has greater influence on the election results than voters' race.\
+
+# Introduction
+
+The demographic composition of the electorate in an area is often considered a good predictor of the election outcome. This does not imply that there are no other variables that influence voters’ decisions. Electors are also susceptible to circumstantial factors such as the charisma and track record of a candidate, or how strong the economy is performing on election year. Still, analyst tend to agree that voting patterns are associated with demographic variables such as voters' education level, income or ethnicity.\
+
+The Pew Research Center, a non-partisan fact tank, has published numerous articles analyzing how the composition of the US electorate has changed over time and how this has impacted the elections. In a recent publication , John Gramlich (2020), senior writer of the Center, analyzed the profile of registered voters in terms of race, age, education, religion and how each of these variables was associated with party id.\ Gramlich showed that white voters have consistently accounted for a much larger share of Republican registered voters than of Democratic voters, and that voters who identify with the Democratic Party or lean toward it are much more likely than their Republican counterparts to have a college degree.\
+
+Prominent scholars have also taken a data driven approach to analyze the relation between voters’ behavior and demographics. Barilla and Levernier (2006), from Georgia Southern University, analyzed the 2000 US election and concluded that economic and demographic characteristics were important determinants of the observed voting patterns. Hill, Hopkins and Huber (2019) examined whether demographic changes at low levels of aggregation were associated with vote shifts between 2012 and 2016. They showed that influxes of Hispanics or non citizen immigrants benefited democrats over republicans. Diggs, Farooq, Kidd, and Murray (2006), on the other hand, analyzed black voter's preferences and concluded the influence of Democratic Party allegiance is  a very powerful cue for them. Our literature review reveals most researchers focus on the influence of race on voting behavior, highlighting the tendency of Hispanic and particularly black voters to support Democratic candidates.\
+
+If, as previous research on the field suggests, economic and demographic variables influence voting behavior, then we should be able to build a powerful model to predict election results in the US. In order to achieve this, we conduct a regression analysis using a [data set](https://github.com/MEDSL/2018-elections-unoffical/blob/master/election-context-2018.md) from the MIT Election Data and Science Lab (MEDSL). This file contains the results for the 2012 and 2016 Presidential, Senate and Congressional elections at the county level. It also includes 18 different demographic variables such as percentage of black population, median household income or percentage of rural population. By selecting different combinations of potential explanatory variables we fit different models, and then select among them based on their predicting power and simplicity.\ Due to time constrains, the analysis presented here focused only on the 2016 presidential election, and specifically on Trump's performance. Our model could and should be adjusted by replicating the analysis on the 2020 election results (updated demographics would  be required).\
+
+The approach we have chosen enables us to build a model that can predict results at different levels: county, state and nation. Our model also allows to compare between different explanatory variables to see which has the greatest impact on voting behavior. In the second part of this project, we test whether or not race, the variable most commonly cited as a predictor of voting patterns in the US, is in fact more influential than other variables included in our model, such as education, gender and age.\
+
+# Question of Interest
+
+What demographic variables help us to predict Presidential election results in the United States?
+
+## Hypothesis
+
+According to our research on which predictors are most important for a candidate's ability to capture vote share, we expect the variable associated with the category of race to have the most influence on our regression model.
+
+# Data Preparation
+
+
+```{r,echo=FALSE,include=FALSE}
+#Load data
+Data <- read_csv(file = "./../data/election-context-2018.csv")
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+#Create two different data frames: one for the election results and the other for demographic variables
+#Create Election_results data frame
+Data %>%
+  #Select columns with election results
+  #and geographical information
+  select(1:21) %>%
+  #Remove columns with information on elections
+  #not included in our analysis
+  select(-(10:21)) %>%
+  #Pivot longer to create new columns:
+  # one referencing candidates' names
+  #and the other one referencing votes obtained
+  pivot_longer(cols = c(4:9),
+             names_to = "candidate",
+             values_to = "votes") %>%
+  #Separate candidate column into two:
+  # One for the candidates' names
+  #and the other for the year of the election
+  separate(col =candidate,
+           into = c("candidate", "year"),
+           sep = "(?<=[A-Za-z])(?=[0-9])") %>%
+  relocate(c(candidate, year,votes), .after = fips ) %>%
+    #Turn new columns into factors to facilitate manipulation
+  mutate(candidate = parse_factor(candidate),
+         year = parse_factor (year)) %>%
+  #Create vote share variable
+  group_by(year,fips) %>%
+  mutate(Vote_share = votes/sum(votes)) %>%
+  mutate(Vote_share = Vote_share*100) %>%
+  #Ungroup
+  ungroup()->
+  #Save to new data frame
+  Election_results
+```
+
+```{r,echo=FALSE,include=FALSE}
+#Create data frame with demographic variables
+Data %>%
+  #Select only those columns with information on
+  #the results of the elections
+  select(-(4:21)) %>%
+  #Remove states and county
+  #(they are already in the results data frame
+  select(-(1:2))->
+  Demographics
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+#Create auxiliary dataframe for the regressiona analysis
+#by joining Election_results and Demographics dataframes
+county_elec_data <- Election_results %>%
+  filter(candidate == "trump", year == "16") %>%
+  left_join(Demographics, by = "fips")
+
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+#Summarise the missing values in each column of the dataset
+colSums(is.na(county_elec_data))
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+#Remove rows with NAs values
+county_elec_data <- county_elec_data %>%
+  filter(!is.na(white_pct))
+
+colSums(is.na(county_elec_data))
+```
+
+As explained, our original data set contained results for the 2012 and 2016 presidential, senate and congressional election, as well as 18 different demographic variables with information at a county level (all quantitative continuous variables, except for one that was ordinal). It is worth noting the Alaska counties are missing. To facilitate the manipulation and tidying of the data, we created two different dataframes: one for the election results and the other for demographic variables.\
+
+* Below we show the first three rows for our original Election Results Data frame
+```{r,echo=FALSE}
+Data[c(1:9)] %>%
+  head(n = 3)
+```
+
+As the output shows, our election results dataframe was originally formatted in such a way that the name of each column contained  a candidate's name and the year of the election in which he competed, while the values corresponded to the number of votes obtained in each county. Since these are actually three different variables, we did pivot longer on the data frame and created three different columns: one referencing the candidate's names, one referencing the year of the election and one referencing votes obtained in each county.\
+
+Another challenge that we faced was that the "votes" variable contained the **number** of votes won by each candidate, not the percentage. With this format, we would not have got any meaningful results from a regression analysis: regardless of how we fitted our model, we would have seen all candidates doing better on bigger counties, were there is a larger number of votes, and worse on smaller counties. To avoid this, we applied some basic arithmetic to transform the votes variables into a vote share variable, containing percentages. Output below shows the  Election results data frame after concluding the tidying process.\
+```{r, echo=FALSE, height=3}
+Election_results [c(1:7)] %>%
+  head(n = 3)
+
+```
+
+As explained, due to time constrains, the analysis presented here focused only on the 2016 presidential election, and specifically on Trump's performance. Therefore, when fitting the regression model, we built an auxiliary data frame containing only information on the president's vote share and the demographic  variables, both at a county level.\
+
+# Data Exploration
+
+We first looked at what variables we wanted to considered for our model. Our response variable was (Trump's) Vote Share. Our potential explanatory variables were
+```{r, echo=FALSE}
+county_elec_data[,-c(1:7)] %>%
+  names()
+```
+Cvap is citizen voting age population. The inclusion of this variable made total population redundant, so we removed the latter. We also removed nonwhite_pct, which was basically the sum of black (population) percentage and hispanic (population) percentage.\
+
+
+## Descriptive Statistics
+
+To analyze the distribution of the variables and the correlation between them, we built a correlation matrix (available in the Appendix A). This showed some multicollinearity present between some of the predictor variables. This was to be expected because certain predictors were actually subsets from the same category of demographics. According to the histogram charts in the matrix, our response variable Vote_share appeared closely normally distributed. All of the predictor variables except age29andunder_pct exhibited skewness of varying degree.
+
+# Model Fitting
+
+Our first approach to try to build the most powerful model was to implement a Stepwise Automatic Selection method.\
+
+## Stepwise Automatic Selection Method of Model 0
+
+
+```{r,echo=FALSE,include=FALSE}
+model0 <- lm(Vote_share~., data=county_elec_data[,-c(1:6,8,13)])
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+#Null regression model
+model_null <- lm(Vote_share~1, data = county_elec_data)
+```
+
+```{r,echo=FALSE,include=FALSE}
+step(model0,
+     scope=list(lower=model_null, upper=model0),
+     direction="both",
+     test="F")
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+model0 <- lm(Vote_share~white_pct + black_pct + hispanic_pct + foreignborn_pct + age29andunder_pct + age65andolder_pct + median_hh_inc + clf_unemploy_pct + lesshs_pct + lesscollege_pct + lesscollege_whites_pct + rural_pct + ruralurban_cc, data = county_elec_data)
+
+summary(model0)
+```
+
+The formula for the model suggested by the Stepwise Automatic Selection Method (shown below) included 13 explanatory variables.
+```{r,echo=FALSE}
+model0$call
+adjusted_r_sq <- summary(model0)$adj.r.squared
+paste0("Adjusted R-squared = ", adjusted_r_sq)
+```
+
+After reviewing the model, we encountered concerns of potential multicollinearity: as our exploratory analysis indicated, some of the  variables included in the model are highly correlated due to the fact that they are actually subsets from the same category of demographics. For instance, percentage of white population and percentage of black population are both racial variables and, as the plot bellows shows, they are strongly negatively correlated:
+
+```{r,echo=FALSE, fig.height=2.6}
+county_elec_data %>%
+  ggplot(aes(x = black_pct, y = white_pct)) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE) +
+  theme_bw() +
+  ylab("Whites as a percentage of total pop.") +
+  xlab("Blacks as a percentage of total pop.")
+```
+
+The correlation matrix included in Appendix A shows that other variables were also strongly correlated. To reduce multicollinearity, we decided to divide the variables into different categories- race, gender, age, income, education, and locality- and fit two simpler models.
+
+### Categories and Respective Variables of Predictors
+
+* Race: Whites, Blacks, Hispanics, and Non-whites as a percentage of total county population.
+* Gender: Female as a percentage of total county population.
+* Age: (age 29 and under) and (age 65 and older) as a percentage of total county population.
+* Income
+  * median household income in the past 12 months (in 2016 inflation-adjusted dollars).
+  * Unemployed as a percentage of total labor force by county.
+* Education
+  * Less than (regular high school diploma) and (bachelor's degree) as a percentage of total county population.
+  * White population with less than (regular high school diploma) and (bachelor's degree) as a percentage of total county population.
+* Locality: rural population as a percentage of total county population.
+
+We built the two alternative models by selecting one variable from each group. Our aim was to find a simpler model with similar predicting power to model 0 (the one suggested by the Stepwise Automatic Selection Method).\
+
+## Model 1
+```{r,echo=FALSE,include=FALSE}
+model1 <- lm(Vote_share ~ white_pct + female_pct + age29andunder_pct + clf_unemploy_pct + lesscollege_pct + rural_pct, data = county_elec_data)
+summary(model1)
+```
+
+```{r,echo=FALSE}
+model1$call
+adjusted_r_sq1 <- summary(model1)$adj.r.squared
+paste0("Adjusted R-squared = ", adjusted_r_sq1)
+```
+
+## Model 2
+
+```{r,echo=FALSE,include=FALSE}
+model2 <- lm(Vote_share ~ black_pct + female_pct + age65andolder_pct + median_hh_inc + lesshs_pct + rural_pct, data = county_elec_data)
+summary(model2)
+```
+
+```{r,echo=FALSE}
+model2$call
+adjusted_r_sq2 <- summary(model2)$adj.r.squared
+paste0("Adjusted R-squared = ", adjusted_r_sq2)
+```
+
+After comparing the predicting power of Model 1 and Model 2, we elected to proceed with Model 1, which resulted in a higher Adjusted R-squared value of 0.5854. Model 1 also proved more efficient in explaining the data as compared to Model 0, the one generated by the Stepwise Automatic Selection Method. With half the number of variables, we lost very little predicting power (Adjusted R-squared decreased from 0.624 to 0.585).\
+
+Based on the importance existing literature assigns to the racial composition of the electorate and the presence of minorities, we tried a small adjustment in model 1, which consisted in replacing only white_pct with black_pct. We also experimented with Hispanic_pct instead of white_pct. None of these alternative models (included in the Appendix B) showed greater predicting power than model1.\
+
+## Assessment of variable importance to Model 1
+
+Once we decided on a model, we proceeded to test our initial hypothesis concerning the influence of our explanatory variables on voting patters.  Specifically, we tested whether or not our racial variable was in fact more influential than other variables included in our model, such as those associated with education, age, gender, or economic status.\
+
+In order to achieve this, we fitted different auxiliary models by removing in every case only the variable whose impact we wanted to measure. By comparing the decrease of the adjusted R squared for every model, we determined which variable contributed the most to the predictive power of model 1, that is, which  explained the largest part of the variability in our response variable.
+
+```{r,echo=FALSE}
+# Removal of white_pct
+modela <- lm(Vote_share ~ female_pct + age29andunder_pct +
+    clf_unemploy_pct + lesscollege_pct + rural_pct, data = county_elec_data)
+```
+
+```{r,echo=FALSE}
+#Removal of female_pct
+modelb <- lm(Vote_share ~ white_pct + age29andunder_pct +
+    clf_unemploy_pct + lesscollege_pct + rural_pct, data = county_elec_data)
+```
+
+```{r,echo=FALSE}
+#Removal of age29andunder_pct
+modelc <- lm(Vote_share ~ white_pct + female_pct + clf_unemploy_pct + lesscollege_pct + rural_pct, data = county_elec_data)
+```
+
+```{r,echo=FALSE}
+#Removal of clf_unemploy_pct
+modeld <- lm(Vote_share ~ white_pct + female_pct + age29andunder_pct +
+    lesscollege_pct + rural_pct, data = county_elec_data)
+```
+
+```{r,echo=FALSE}
+#Removal of lesscollege_pct
+modele <- lm(Vote_share ~ white_pct + female_pct + age29andunder_pct +
+    clf_unemploy_pct + rural_pct, data = county_elec_data)
+```
+
+```{r,echo=FALSE}
+#Removal of lesscollege_pct
+modelf <- lm(Vote_share ~ white_pct + female_pct + age29andunder_pct +
+    clf_unemploy_pct + lesscollege_pct, data = county_elec_data)
+```
+
+Comparison of Model Strength
+```{r,echo=FALSE,include=FALSE}
+selcri<-function(lmout)
+{
+ n <- length(lmout$fit)
+ rsq <- summary(lmout)$r.sq
+ adj.rsq <- summary(lmout)$adj.r.sq
+ aic <- extractAIC(lmout)[2]
+ bic <- extractAIC(lmout, k = log(n))[2]
+ press <- sum((lmout$residuals/(1 - hatvalues(lmout)))^2)
+ cbind(rsq, adj.rsq, aic, bic, press)
+}
+```
+
+```{r,echo=FALSE}
+aa <- selcri(model1)
+a <- selcri(modela)
+b <- selcri(modelb)
+c <- selcri(modelc)
+d <- selcri(modeld)
+e <- selcri(modele)
+f <- selcri(modelf)
+model_strength_comparison <- rbind.data.frame(aa, a, b, c, d, e, f)
+model_strength_comparison %>%
+  mutate(Model = c("Full Model", "Without white_pct", "Without female_pct", "Without age29andunder_pct", "Without clf_unemploy_pct", "Without lesscollege_pct", "Without rural_pct"), .before = rsq) %>%
+  arrange(-(adj.rsq))
+```
+
+The output above shows that the largest decrease in the predicting power of the model occurred when we removed the variable associated with education, that is, "population with an education of less than a bachelor's degree". Based on these results, we rejected our original hypothesis that our racial variable is the one that has the largest influence in voting behavior.\
+
+The comparison of each of the variables' contribution to the model's predictive power not only revealed that education is the most influential variable, but also that some of the variables we had selected could easily be removed without weakening the model. The output above showed that the gender, age and locality predictors explained a very small portion of the variability on  vote share once the other variables were already considered.
+
+In this particular model, gender as a percentage of county population predictably does not tell us much, given most counties are pretty close to 50-50 between male and female. A different approach would be required to evaluate the relationship between gender and voters' behavior.\
+
+In the interest of parsimony, we did a new adjustment to our model and removed the variables female_pct, age29andunder_pct, rural_pct.
+
+## Model 3
+```{r,echo=FALSE,include=FALSE}
+model3 <- lm(Vote_share ~ white_pct + lesscollege_pct + clf_unemploy_pct, data = county_elec_data)
+summary(model3)
+```
+
+```{r,echo=FALSE}
+model3$call
+adjusted_r_sq3 <- summary(model3)$adj.r.squared
+paste0("Adjusted R-squared = ", adjusted_r_sq3)
+```
+
+When comparing the fit of Model 1 (our original model with six explanatory variables) against Model 3 (our new adjusted model) on the basis of Adjusted R-squared, we noticed a small difference of 0.0158327. This proved that the  addition of the three variables- female_pct, rural_pct, and age29andunder_pct- contributed little to predicting the outcome of the election once the other variables were already considered. Based on this finding, we decided that model 3 would be our final model.
+
+* $\hat {Voteshare} = -31.8722751 + 0.3440012(whitepct) + 0.9700893(lesscollegepct) - 1.1795349(clfunemploypct)$
+
+According to our prediction equation, there is a positive relationship between percentage of white population and vote share for the republican candidate: as one increases, so does the other. There is also a positive relationship between the  percentage of the population in a county without a college degree and the electoral support the republican candidate receives there. These findings are in line with the reviewed literature.\
+
+Finally, our model reveals a negative correlation between the unemployment percentage and the republican candidate's vote share. Since our analysis is limited only to the 2016 election, it is possible that unemployment has a negative relationship not with republican candidate's vote share but with the incumbent's vote share, that is, that people in counties with high unemployment tend to blame the sitting president for their economic struggles, regardless of what party he belongs to.\
+
+
+# Testing the model
+
+Besides analyzing the Adjusted R-squared of model 3, we decided to test its predictive power in a more practical manner: comparing the predicted winner of the 2016 election in every county with the actual winner of the 2016 election.
+
+```{r,echo=FALSE,include=FALSE}
+county_elec_data %>%
+  mutate(predicted_vote_share = fitted(model3),
+         PredWon = round(predicted_vote_share/100),
+         Won = round(Vote_share/100)) -> Predicted
+
+```
+
+```{r,echo=FALSE, message= FALSE}
+plot_usmap(data = Predicted, values = "Won", color = "white", size =.1) +
+  scale_fill_gradientn(colours=c("#001F3F","#0000FF", "lightblue", "#b3e5fc", "#ffcdd2", "#FFCCCB", "salmon","red"), name = "Trump Vote Share by County", label = scales::comma) +
+  scale_fill_continuous(low = "blue", high = "red",
+                        name = "Trump Counties Won", label = scales::comma)+
+  theme(panel.background = element_rect(fill = "white")) +
+  labs(title = "2016 Election results")+
+  theme(legend.position = "none") -> Win
+```
+
+```{r,echo=FALSE, message= FALSE}
+plot_usmap(data = Predicted, values = "PredWon", color = "white", size =.1) +
+  scale_fill_gradientn(colours=c("#001F3F","#0000FF", "lightblue", "#b3e5fc", "#ffcdd2", "#FFCCCB", "salmon","red"), name = "Trump Predicted Vote Share by County", label = scales::comma) +
+  scale_fill_continuous(low = "blue", high = "red",
+                        name = "Trump Predicted Counties Won", label = scales::comma)+
+  labs(title = "2016 predicted Election results")+
+  theme(panel.background = element_rect(fill = "white")) +
+  theme(legend.position = "none") -> PredictedWin
+```
+
+```{r,echo=FALSE, fig.height = 2.6, fig.width = 7}
+grid.arrange(Win, PredictedWin, nrow=1)
+```
+
+Both maps show similar patterns. It looks, however, as if our model over estimated Trump's vote share in the north east as wells as in the north west. One could hypothesize that this phenomenon results form the large percentage of white population in those areas that lean democrat, contrary to what we observe in the rest of the country.
+
+Software calculations showed us that the predicted winner of the election was not the same as the actual winner in only 347 out of the 3111 counties. That is a percentual error barely over 11%.
+
+```{r,echo=FALSE,include=FALSE}
+#Calculating number of counties where the winner predicted
+#by the model was not the actual winner
+Error<-sum(Predicted$PredWon!=Predicted$Won, na.rm = TRUE)
+Percentual_Error<- (Error/nrow(Predicted))*100
+Error
+Percentual_Error
+```
+
+# Model Diagnostics
+
+Linearity
+
+* Graphical test: Residuals vs Fitted Plot ($e_i$ vs $\hat Y$)
+
+```{r,echo=FALSE, fig.height = 2.6}
+plot(model3, which = 1)
+```
+
+* Interpretation of Residual vs Fitted Values Plot
+
+  * This plot helped us evaluate the assumption of linearity. The red line looks relatively flat and  does not deviate much from the dotted horizontal line of 0, meaning there does not appear to be a systematic pattern present. There is no clear violation of the linearity assumption. The plot was also useful in evaluating whether or not the assumption of homoscedasticity was violated. If there was constant variance about the line at 0 (homoscedasticity), the spread of residuals would be approximately the same across the x-axis. The plot shown above suggested there may be a violation of constant variance. We evaluated this by conducting a Brensch-Pagan test.
+
+Constant Variance test\
+
+* Statistical test: Brensch-Pagan test
+* Hypothesis
+  * $H_0:$ The error variance is constant
+  * $H_a:$ The error variance is not constant
+* Conclusion (calculations available in the appendix)
+  * The test resulted in a p-value = 2.2e-16, which led us to reject $H_0$. This backed our interpretation of the plot: that the error variance is not constant.
+
+Normality
+
+* Graphical tests: Histogram and Q-Q plot
+```{r,echo=FALSE, fig.height=2.6}
+par(mfrow=c(1,2))
+hist(model3$residuals, main = "Residuals")
+qqnorm(model3$residuals, main = "Normal Q-Q Plot")
+qqline(model3$residuals)
+```
+
+*  The histogram plot of residuals displays a normal distribution and the dots on the Normal Q-Q plot are roughly scattered around the reference line randomly. There is minor deviation near the bottom left tail; however, it is not severe. This suggested the normality assumption was not grossly violated.\
+
+We ran a Shapiro-Wilks test to confirm our interpretation of the plot.\
+
+* Hypothesis
+  * $H_0:$ Residuals follow normal distribution
+  * $H_a:$ Residuals do not follow normal distribution
+* Conclusion (calculations available in the appendix)
+  * The Shapiro test resulted in a p-value = 0.2981 > $\alpha = 0.05$. Therefore, we did NOT reject H_0. We concluded the residuals followed a normal distribution and that the normality assumption was not violated.\
+
+Outliers in Data
+
+Finally, we checked for the presence of outliers that could have a large influence on the fit of our model.\
+
+* Graphical tests: Residuals vs Leverage Plot
+```{r, fig.height=3.5}
+plot(model3, which = 5)
+```
+
+* Interpretation of Residuals vs Leverage Plot
+
+  * In this plot there is no evidence of outliers. Those Cook's Distance dashed curves do not appear on the plot. This means that none of the points exhibited both high residual and leverage nor were they influential to the regression model.
+
+Conclusion of Model Diagnostics
+
+* In conclusion, Model 3 upheld the assumptions of Linearity and Normality, and did not contain any Influential cases.  We did detect a small violation of the Constant Variance assumption. However, it did not appear egregious with respect to the size of our sample.
+
+# Summary
+
+Based on the assumption that economic and demographic characteristics are important determinants of the voting patterns, we built a model to predict voting behavior in the presidential elections of the US. By experimenting with different variable selection processes and criteria, we designed  a powerful and simple model, with only 3 explanatory variables: whites as a percentage of total population, percentage of unemployed population and population with an education of less than a bachelor's degree.\ We tested the model for the 2016 election and found that in almost 90% of all counties the predicted winner matched the actual winner of the election. This high predicting accuracy suggests that there is in fact a relation between  demographics and voting behavior.\
+
+Our model also allowed us to compare between different explanatory variables to see which had
+the greatest impact on voting behavior. By comparing how much of the variability in the election results by county could be explained by each variable, we determined that "population with an education of less than a bachelor's degree" actually contributed more to the predicting power of the model than "percentage of white population". This suggests that researchers on the field, who have mainly been focused on the influence of race on voting patterns, should devote more time to studying the impact of education.\
+
+Since, as explained previously, the analysis presented here focused only on the 2016 presidential election,  our model could and should be adjusted by replicating the analysis on the 2020 election results. Future researcher could also attempt to make longer run predictions: by analyzing census projections, they could anticipate how underlying demographic changes will affect the winning chances of the two major parties.\
+
+\newpage
+
+# Appendices
+
+## Appendix A: Supplementary Descriptive Statistics
+
+Evaluation of demographic predictor and relationship between response variable and demographic predictor
+
+### Plot 1
+
+```{r}
+hist(county_elec_data$white_pct)
+```
+
+* The histogram is right-skewed. There are no gaps in the data.
+
+### Plot 2
+
+```{r}
+plot(Vote_share~white_pct, data = county_elec_data)
+```
+
+* According to this plot, there appeared to be a linear relationship between white_pct and Vote_share. Vote_share increased as white_pct increased. We also noticed that the variation in Vote_share increased as white_pct increased.
+* We can infer from this association that counties that were majority white led to greater Vote_share for Donald Trump until the white_pct reached 90 and we saw a larger variation in the concentration of Vote_share.
+
+### Plot 3
+
+```{r}
+hist(county_elec_data$black_pct)
+```
+
+* The histogram is left-skewed. There are no gaps in the data.
+
+### Plot 4
+
+```{r}
+plot(Vote_share~black_pct, data = county_elec_data)
+```
+
+* The greatest variability in Vote_share occurred within counties that had near 0 black_pct. There is a negative relationship present between Vote_share and black_pct. As black_pct increased, Vote_share trended downwards steadily.
+
+### Plot 5
+
+```{r}
+hist(county_elec_data$female_pct)
+```
+
+* The histogram is left-skewed. There are no gaps in the data.
+
+### Plot 6
+
+```{r}
+plot(Vote_share~female_pct, data = county_elec_data)
+```
+
+* According to this plot, counties with at least 50 percent of female voters led to large variation in Vote_share, evident by the dense concentration between 20 and 90 according to the y-axis. There was no linear association present between these two variables.
+* There was little to no appreciable association between female_pct and Vote_share in counties where female_pct was under 30.
+
+### Plot 7
+
+```{r}
+hist(county_elec_data$age29andunder_pct)
+```
+
+* The histogram is normally distributed. There is a gap on the left tail suggesting potential outliers.
+
+### Plot 8
+
+```{r}
+plot(Vote_share~age29andunder_pct, data = county_elec_data)
+```
+
+* There was no linear association between these two variables
+* According to this plot counties with age29andunder_pct between 30 and 45 were associated with high Vote_share.
+
+### Plot 9
+
+```{r}
+hist(county_elec_data$age65andolder_pct)
+```
+
+* The histogram is normally distributed. There are no gaps in the data.
+
+### Plot 10
+
+```{r}
+plot(Vote_share~age65andolder_pct, data = county_elec_data)
+```
+
+* There appeared to be a possible linear association between these two variables.
+* According to this plot counties as age65andolder_pct increased, Vote_share increased up until about when age65andolder_pct reached 40; excluding the outlier past 50.
+
+### Plot 11
+
+```{r}
+hist(county_elec_data$median_hh_inc)
+```
+
+* The histogram is right-skewed. There are no gaps in the data.
+
+### Plot 12
+
+```{r}
+plot(Vote_share~median_hh_inc, data = county_elec_data)
+```
+
+* There appeared to be a possible linear association between the two variables.
+* Counties with median household income between 20,000 and 70,000 were associated with higher Vote_share.
+
+### Plot 13
+
+```{r}
+hist(county_elec_data$clf_unemploy_pct)
+```
+
+* The histogram is right-skewed. There are no gaps in the data.
+
+### Plot 14
+
+```{r}
+plot(Vote_share~clf_unemploy_pct, data = county_elec_data)
+```
+
+* There did not appear to be a linear association between the two variables.
+* Counties with approximatly 3 to approximately 10 percent of the voters unemployed were associated with high Vote_share.
+
+### Plot 15
+
+```{r}
+hist(county_elec_data$lesscollege_pct)
+```
+
+* The histogram is left-skewed. There is a gap on the left tail suggesting potential outliers.
+
+### Plot 16
+
+```{r}
+plot(Vote_share~lesscollege_pct, data = county_elec_data)
+```
+
+* According to this plot, there appeared to be a linear relationship between lesscollege_pct and Vote_share. Vote_share increased as lesscollege_pct within respective counties increased. We also noticed that the variation in Vote_share increased as lesscollege_pct increased.
+* A point to take note of is it appeared not much Vote_share was captured until the percentage reached at least 40 at which point there was a steady increase in Vote_share. This led us to infer that counties where at least half the percentage of voters had less than a college degree were associated with a higher concentration of Vote_share for Donald Trump.
+
+### Plot 17
+
+```{r}
+hist(county_elec_data$lesshs_pct)
+```
+
+* The histogram is right-skewed. There are no gaps in the data.
+
+### Plot 18
+
+```{r}
+plot(Vote_share~lesshs_pct, data = county_elec_data)
+```
+
+* There did not appear to be a linear association between the two variables.
+
+### Plot 19
+
+```{r}
+hist(county_elec_data$rural_pct)
+```
+
+* The histogram is left-skewed. There are no gaps in the data.
+
+### Plot 20
+
+```{r}
+plot(Vote_share~rural_pct, data = county_elec_data)
+```
+
+* There appeared to be a linear association between the two variables.
+* The was high variability present at 0 and 100 on the x-axis.
+
+Correlation matrix
+
+### Plot 21
+
+```{r,echo=FALSE}
+#We remove variaibles that should not be considered explanatory variables: state, county, fips candidate, year, votes, total population and non-white-pct
+county_elec_data[,-c(1:6,8,13)] %>%
+  PerformanceAnalytics::chart.Correlation(histogram = TRUE, pch=19)
+view(county_elec_data)
+```
+
+## Appendix B: R Code for Model Fitting and Supplemental Visual Variable Analysis
+
+### Geographical Representation of racial variables.
+
+* As you can also see from the maps below, counties with large white populations for the most part do not have large black populations, and vice-versa. This makes sense given that these two variables are negatively correlated to each other, with both subsets coming from the same demographic category.
+```{r,echo=FALSE}
+plot_usmap(data = Data, values = "white_pct", color = "white", size = .1) +
+  scale_fill_gradientn(colours=c("#001F3F","#0000FF", "lightblue", "#b3e5fc", "#ffcdd2", "#FFCCCB", "salmon","red"), name = "White Population Percentage by County", label = scales::comma) +
+  theme(panel.background = element_rect(fill = "white")) +
+  theme(legend.position = "top") -> white_share
+
+
+
+plot_usmap(data = Data, values = "black_pct", color = "white", size = .1) +
+  scale_fill_gradientn(colours=c("red", "#b3e5fc", "lightblue","blue", "#001F3F"), name = "Black Population Percentage by County", label = scales::comma) +
+  theme(panel.background = element_rect(fill = "white")) +
+  theme(legend.position = "top")  -> black_share
+
+
+```
+
+### Maps 1 & 2
+
+```{r,echo=FALSE, fig.height = 2.5, fig.width = 7}
+grid.arrange(black_share, white_share, nrow=1)
+```
+
+### Model with black population
+
+```{r}
+model2_blakc <- lm(Vote_share ~ black_pct + female_pct + age65andolder_pct + median_hh_inc + lesshs_pct + rural_pct, data = county_elec_data)
+summary(model2_blakc)
+```
+
+
+### Model with Hispanic population
+
+```{r}
+model2_hispanic <- lm(Vote_share ~ hispanic_pct + female_pct + age65andolder_pct + median_hh_inc + lesshs_pct + rural_pct, data = county_elec_data)
+summary(model2_hispanic)
+```
+
+## Appendix D: Model 3 Diagnostics
+
+### Linearity
+
+* Graphical test: Residuals vs Fitted Plot ($e_i$ vs $\hat Y$)
+
+```{r,echo=FALSE, fig.height = 3.5}
+plot(model3, which = 1)
+```
+
+* Interpretation of Residual vs Fitted Values Plot
+
+  * This plot helped us evaluate the assumption of linearity. The red line looks relatively flat and  does not deviate much from the dotted horizontal line of 0, meaning there does not appear to be a systematic pattern present. There is no clear violation of the linearity assumption. The plot was also useful in evaluating whether or not the assumption of homoscedasticity was violated. If there was constant variance about the line at 0 (homoscedasticity), the spread of residuals would be approximately the same across the x-axis. The plot shown above suggested there may be a violation of constant variance. We evaluated this by conducting a Brensch-Pagan test.
+
+### Constant Variance test
+
+* Statistical test: Brensch-Pagan test
+* Hypothesis
+  * $H_0:$ The error variance is constant
+  * $H_a:$ The error variance is not constant
+
+* Calculation
+```{r,echo=FALSE}
+# Test Statistic BP = 118.68, p-value = 2.2e-16
+lmtest::bptest(model3, studentize = F)
+```
+```{r,echo=FALSE}
+# Critical Value = 7.814728
+qchisq(0.95,3)
+```
+
+* Decision Rule
+  * Chi-square distribution $X_{crit}^{2} = X^{2}(1- \alpha; 1)$.
+  * If $X_{BP}^{2} \leq X_{crit}^{2}$, do not reject $H_0$.
+  * If $X_{BP}^{2} > X_{crit}^{2}$, conclude $H_a$.
+  * Alternatively, use p-value = $P(X_{df=1}^{2} > X_{BP}^{2})$.
+
+* Conclusion
+  * According to $X_{BP}^{2} = 118.68$ is larger than $X_{crit}^{2} = 7.814728$ and p-value = 2.2e-16 < $\alpha = 0.05$, we reject $H_0$. Therefore, as the plot suggested, the error variance is not constant.
+
+### Normality
+
+* Graphical tests: Histogram and Q-Q plot
+```{r,echo=FALSE, fig.height=2.45}
+par(mfrow=c(1,2))
+hist(model3$residuals, main = "Residuals")
+qqnorm(model3$residuals, main = "Normal Q-Q Plot")
+qqline(model3$residuals)
+```
+
+*  The histogram plot of residuals displays a normal distribution and the dots on the Normal Q-Q plot are roughly scattered around the reference line randomly. There is minor deviation near the bottom left tail; however, it is not severe. This suggested the normality assumption was not grossly violated.\
+
+We ran a Shapiro-Wilks test to confirm our interpretation of the plot.\
+
+* Hypothesis
+  * $H_0:$ Residuals follow normal distribution
+  * $H_a:$ Residuals do not follow normal distribution
+
+* Calculation
+```{r,echo=FALSE}
+shapiro.test(model3$residuals)
+```
+
+* Decision Rule
+  * Reject $H_0$ if p-value < $\alpha$
+
+* Conclusion
+  * The Shapiro test resulted in a p-value = 0.2981 > $\alpha = 0.05$. Therefore, we did NOT reject H_0. We concluded the residuals followed a normal distribution and that the normality assumption was not violated.\
+
+### Outliers in Data
+
+Finally, we checked for the presence of outliers that could have a large influence on the fit of our model.\
+
+* Graphical tests: Residuals vs Leverage Plot
+```{r, fig.height=3}
+plot(model3, which = 5)
+```
+
+
+# References
